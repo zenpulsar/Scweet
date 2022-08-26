@@ -1,3 +1,6 @@
+import json
+import time
+import zipfile
 from io import StringIO, BytesIO
 import os
 import re
@@ -7,6 +10,7 @@ import chromedriver_autoinstaller
 import geckodriver_autoinstaller
 from selenium.common.exceptions import NoSuchElementException
 from selenium import webdriver
+from selenium.webdriver import DesiredCapabilities, Proxy
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 import datetime
@@ -73,7 +77,8 @@ def get_data(card, save_images=False, save_dir=None):
         like_cnt = 0
 
     try:
-        elements = card.find_elements(by=By.XPATH, value='.//div[2]/div[2]//img[contains(@src, "https://pbs.twimg.com/")]')
+        elements = card.find_elements(by=By.XPATH,
+                                      value='.//div[2]/div[2]//img[contains(@src, "https://pbs.twimg.com/")]')
         for element in elements:
             image_links.append(element.get_attribute('src'))
     except:
@@ -119,17 +124,80 @@ def get_data(card, save_images=False, save_dir=None):
     return tweet
 
 
-def init_driver(headless=True, proxy=None, show_images=False, option=None, firefox=False, env=None):
+def set_proxy_options(options, proxy: str):
+    proxy = proxy.strip('https://').strip('http://').strip('/')
+    proxy_data, proxy_url = proxy.split('@')
+    proxy_host, proxy_port = proxy_url.split(':')
+    proxy_user, proxy_pass = proxy_data.split(':')
+
+    manifest_json = """
+    {
+    "version": "1.0.0",
+    "manifest_version": 2,
+    "name": "Chrome Proxy",
+    "permissions": [
+        "proxy",
+        "tabs",
+        "unlimitedStorage",
+        "storage",
+        "<all_urls>",
+        "webRequest",
+        "webRequestBlocking"
+    ],
+    "background": {
+        "scripts": ["background.js"]
+    },
+    "minimum_chrome_version":"22.0.0"
+    }
+    """
+
+    background_js = """
+    var config = {
+        mode: "fixed_servers",
+        rules: {
+        singleProxy: {
+            scheme: "http",
+            host: "%s",
+            port: parseInt(%s)
+        },
+        bypassList: ["localhost"]
+        }
+    };
+
+    chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+
+    function callbackFn(details) {
+        return {
+            authCredentials: {
+            username: "%s",
+            password: "%s"
+            }
+        };
+    }
+
+    chrome.webRequest.onAuthRequired.addListener(
+            callbackFn,
+            {urls: ["<all_urls>"]},
+            ['blocking']
+    );
+    """ % (proxy_host, proxy_port, proxy_user, proxy_pass)
+    pluginfile = 'proxy_auth_plugin.zip'
+    with zipfile.ZipFile(pluginfile, 'w') as zp:
+        zp.writestr("manifest.json", manifest_json)
+        zp.writestr("background.js", background_js)
+    options.add_extension(pluginfile)
+    return options
+
+
+def init_driver(headless=True, proxy=None, option=None, firefox=False, remote=None):
     """ initiate a chromedriver or firefoxdriver instance
         --option : other option to add (str)
     """
 
+    options = ChromeOptions()
+
     if firefox:
         options = FirefoxOptions()
-        driver_path = geckodriver_autoinstaller.install()
-    else:
-        options = ChromeOptions()
-        driver_path = chromedriver_autoinstaller.install()
 
     if headless is True:
         print("Scraping on headless mode.")
@@ -139,18 +207,28 @@ def init_driver(headless=True, proxy=None, show_images=False, option=None, firef
         options.headless = False
     options.add_argument('log-level=3')
     if proxy is not None:
-        options.add_argument('--proxy-server=%s' % proxy)
+        options = set_proxy_options(options, proxy)
         print("using proxy : ", proxy)
-    if show_images == False and firefox == False:
-        prefs = {"profile.managed_default_content_settings.images": 2}
-        options.add_experimental_option("prefs", prefs)
     if option is not None:
         options.add_argument(option)
 
-    if firefox:
+    # disable show images
+    prefs = {"profile.managed_default_content_settings.images": 2}
+    options.add_experimental_option("prefs", prefs)
+
+    capabilities = {
+        "browserName": "chrome",
+        'goog:loggingPrefs': {'performance': 'ALL'},
+    }
+
+    if remote:
+        driver = webdriver.Remote(remote, desired_capabilities=capabilities, options=options)
+    elif firefox:
+        driver_path = geckodriver_autoinstaller.install()
         driver = webdriver.Firefox(options=options, executable_path=driver_path)
     else:
-        driver = webdriver.Chrome(options=options, executable_path=driver_path)
+        driver_path = chromedriver_autoinstaller.install()
+        driver = webdriver.Chrome(options=options, desired_capabilities=capabilities, executable_path=driver_path)
 
     driver.set_page_load_timeout(100)
     return driver
@@ -179,8 +257,11 @@ def log_search_page(driver, since, until_local, lang, display_type, words, to_ac
     else:
         lang = ""
 
-    until_local = "until%3A" + until_local + "%20"
-    since = "since%3A" + since + "%20"
+    until_local_unix = int(until_local.replace(tzinfo=datetime.timezone.utc).timestamp())
+    since_unix = int(since.replace(tzinfo=datetime.timezone.utc).timestamp())
+
+    until_local = "until%3A" + str(until_local_unix) + "%20"
+    since = "since%3A" + str(since_unix) + "%20"
 
     if display_type == "Latest" or display_type == "latest":
         display_type = "&f=live"
@@ -267,34 +348,43 @@ def log_in(driver, env, timeout=20, wait=4):
     sleep(random.uniform(wait, wait + 1))
 
 
-def keep_scroling(driver, data, writer, tweet_ids, scrolling, tweet_parsed, limit, scroll, last_position,
-                  save_images=False):
+def keep_scroling(driver, data, scrolling, tweet_parsed, limit, scroll, last_position):
     """ scrolling function for tweets crawling"""
-
-    save_images_dir = "/images"
-
-    if save_images == True:
-        if not os.path.exists(save_images_dir):
-            os.mkdir(save_images_dir)
 
     while scrolling and tweet_parsed < limit:
         sleep(random.uniform(0.5, 1.5))
         # get the card of tweets
-        page_cards = driver.find_elements(by=By.XPATH, value='//article[@data-testid="tweet"]')  # changed div by article
-        for card in page_cards:
-            tweet = get_data(card, save_images, save_images_dir)
-            if tweet:
-                # check if the tweet is unique
-                tweet_id = ''.join(tweet[:-2])
-                if tweet_id not in tweet_ids:
-                    tweet_ids.add(tweet_id)
-                    data.append(tweet)
-                    last_date = str(tweet[2])
-                    print("Tweet made at: " + str(last_date) + " is found.")
-                    writer.writerow(tweet)
-                    tweet_parsed += 1
-                    if tweet_parsed >= limit:
-                        break
+        # page_cards = driver.find_elements(by=By.XPATH,
+        #                                   value='//article[@data-testid="tweet"]')  # changed div by article
+        # for card in page_cards:
+        #     tweet = get_data(card, save_images, save_images_dir)
+        #     if tweet:
+        #         # check if the tweet is unique
+        #         tweet_id = ''.join(tweet[:-2])
+        #         if tweet_id not in tweet_ids:
+        #             tweet_ids.add(tweet_id)
+        #             data.append(tweet)
+        #             last_date = str(tweet[2])
+        #             print("Tweet made at: " + str(last_date) + " is found.")
+        #             writer.writerow(tweet)
+        #             tweet_parsed += 1
+        #             if tweet_parsed >= limit:
+        #                 break
+
+        logs_raw = driver.get_log("performance")
+        logs = [json.loads(lr["message"])["message"] for lr in logs_raw]
+
+        for log in logs:
+            if log['method'] != 'Network.responseReceived':
+                continue
+            if 'adaptive.json' not in log['params']['response']['url']:
+                continue
+            request_id = log['params']['requestId']
+            response = execute_remote_cdp_cmd(driver, "Network.getResponseBody", {"requestId": request_id})
+            body = json.loads(response.get('body')).get('globalObjects')
+            for key in data:
+                data[key].update(body[key])
+
         scroll_attempt = 0
         while tweet_parsed < limit:
             # check scroll position
@@ -314,7 +404,7 @@ def keep_scroling(driver, data, writer, tweet_ids, scrolling, tweet_parsed, limi
             else:
                 last_position = curr_position
                 break
-    return driver, data, writer, tweet_ids, scrolling, tweet_parsed, scroll, last_position
+    return driver, data, scrolling, tweet_parsed, scroll, last_position
 
 
 def get_users_follow(users, headless, env, follow=None, verbose=1, wait=2, limit=float('inf')):
@@ -422,3 +512,13 @@ def dowload_images(urls, save_dir):
     for i, url_v in enumerate(urls):
         for j, url in enumerate(url_v):
             urllib.request.urlretrieve(url, save_dir + '/' + str(i + 1) + '_' + str(j + 1) + ".jpg")
+
+
+def execute_remote_cdp_cmd(driver, cmd, params):
+    if params is None:
+        params = {}
+    resource = "/session/%s/chromium/send_command_and_get_result" % driver.session_id
+    url = driver.command_executor._url + resource
+    body = json.dumps({'cmd': cmd, 'params': params})
+    response = driver.command_executor._request('POST', url, body)
+    return response.get('value')
