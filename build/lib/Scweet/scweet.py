@@ -641,6 +641,12 @@ def scrape(since: datetime, until: datetime = None, words=None, to_account=None,
             continue
         data['tweets'][tweet_id]['created_at'] = created_at
 
+    keys = list(data['users'].keys())
+    for user_id in keys:
+        user = data['users'][user_id]
+        created_at = datetime.datetime.strptime(user['created_at'], date_format)
+        data['users'][user_id]['created_at'] = created_at
+
     return data
 
 
