@@ -586,7 +586,7 @@ def scrape(since: datetime, until: datetime = None, words=None, to_account=None,
     since_local = since
     # if <until>=None, set it to the actual date
     if until is None:
-        until = datetime.date.today()
+        until = datetime.datetime.today()
     # set refresh at 0. we refresh the page for each <interval> of time.
     refresh = 0
 
