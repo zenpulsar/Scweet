@@ -3,7 +3,7 @@ import argparse
 from time import sleep
 import random
 
-from Scweet.utils import init_driver, log_search_page, keep_scroling
+from Scweet.utils import init_driver, log_search_page, keep_scroling, execute_remote_cdp_cmd
 
 
 def scrape(since: datetime, until: datetime = None, words=None, to_account=None, from_account=None,
@@ -568,7 +568,8 @@ def scrape(since: datetime, until: datetime = None, words=None, to_account=None,
     #     'Hashtags',  # hashtags
     #     'Cashtags',  # cashtags
     # ]
-    # list that contains all data 
+    # list that contains all data
+
     data = {
         'tweets': {},
         'users': {},
@@ -592,6 +593,38 @@ def scrape(since: datetime, until: datetime = None, words=None, to_account=None,
 
     # initiate the driver
     driver = init_driver(headless, proxy, remote=remote)
+
+    execute_remote_cdp_cmd(driver, "Network.setBlockedURLs", {'urls': [
+        "pbs.twimg.com",
+        "abs-0.twimg.com",
+        "video.twimg.com",
+        "api.twitter.com/1.1/jot/client_event.json",
+        "twitter.com/i/api/1.1/attribution/event.json",
+        "abs.twimg.com/responsive-web/client-web/loader.AudioOnlyVideoPlayer.b4817438.js",
+        "abs.twimg.com/responsive-web/client-web/ondemand.FooterLoader.d48c1f88.js",
+        "abs.twimg.com/responsive-web/client-web/loader.TweetCurationActionMenu.365f49f8.js",
+        "abs.twimg.com/responsive-web/client-web/loaders.video.PlayerHls1.1.060f62b8.js",
+        "abs.twimg.com/responsive-web/client-web/ondemand.InlinePlayer.62dcb3d8.js",
+        "abs.twimg.com/responsive-web/client-web/shared~loaders.video.VideoPlayerDefaultUI~loaders.video.VideoPlayerHashtagHighlightUI~loaders.video.VideoPlay.8902b6b8.js",
+        "abs.twimg.com/responsive-web/client-web/shared~loaders.video.VideoPlayerDefaultUI~loaders.video.VideoPlayerEventsUI.52e77958.js",
+        "abs.twimg.com/responsive-web/client-web/loaders.video.VideoPlayerDefaultUI.b178b878.js",
+        "abs.twimg.com/responsive-web/client-web/ondemand.LottieWeb.a59fdf58.js",
+        "abs.twimg.com/responsive-web/client-web/shared~ondemand.EmojiPickerData~ondemand.ParticipantReaction~ondemand.EmojiPicker.887de1c8.js",
+        "abs.twimg.com/responsive-web/client-web/ondemand.emoji.ru.0cbf7cb8.js",
+        "abs.twimg.com/sticky/animations/like.3.json",
+        "abs.twimg.com/responsive-web/client-web/bundle.NetworkInstrument.f5624888.js",
+        "www.google-analytics.com/analytics.js",
+        "accounts.google.com",
+        "abs.twimg.com/responsive-web/client-web/ondemand.BranchSdk.437e5be8.js",
+        "api.twitter.com/1.1/jot/error_log.json",
+        "twitter.com/i/api/1.1/hashflags.json",
+        "twitter.com/manifest.json",
+        "abs.twimg.com/favicons/twitter.2.ico",
+        "abs.twimg.com/fonts/*",
+        "abs.twimg.com/responsive-web/client-web/ondemand.Dropdown.4bba0ce8.js",
+        "abs.twimg.com/responsive-web/client-web/feature-switch-manifest.5b7a32c8.js"
+    ]})
+    execute_remote_cdp_cmd(driver, "Network.enable", {})
 
     # log search page for a specific <interval> of time and keep scrolling unltil scrolling stops or reach the <until>
     while until_local <= until:
@@ -618,7 +651,7 @@ def scrape(since: datetime, until: datetime = None, words=None, to_account=None,
         # number of tweets parsed
         tweet_parsed = 0
         # sleep
-        sleep(random.uniform(0.5, 1.5))
+        sleep(random.uniform(0.2, 0.6))
         # start scrolling and get tweets
         driver, data, scrolling, tweet_parsed, scroll, last_position = \
             keep_scroling(driver, data, scrolling, tweet_parsed, limit, scroll, last_position)
